@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 秘密情報（後でAPIキーを使うときのため）
+.env
+
+# エディタ・OSが作るファイル
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# main.py の書き込み途中の一時ファイル
+storage/*.tmp
