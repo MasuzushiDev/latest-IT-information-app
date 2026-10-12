@@ -1,0 +1,28 @@
+{
+    "feeds": [
+    {
+        "name": "ITmedia AI＋ 新着",
+        "url": "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml",
+        "category": "media_jp",
+        "enabled": true
+        },
+      {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "category": "company_blog",
+        "enabled": true
+      },
+      {
+        "name": "TechCrunch AI",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "category": "media",
+        "enabled": true
+      },
+      {
+        "name": "arXiv cs.CL",
+        "url": "https://rss.arxiv.org/rss/cs.CL",
+        "category": "research",
+        "enabled": false
+      }
+    ]
+  }

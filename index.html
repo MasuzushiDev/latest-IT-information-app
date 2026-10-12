@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>AIニュース</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-head">
+    <div class="app-head-row">
+      <h1>AIニュース</h1>
+      <p id="updated" class="updated"></p>
+    </div>
+    <div id="chips" class="chips" role="group" aria-label="カテゴリで絞り込む" hidden></div>
+  </header>
+
+  <main>
+    <div id="days"></div>
+    <p id="status" class="status" role="status">読み込み中…</p>
+    <button id="more" class="more" type="button" hidden></button>
+    <noscript><p class="status">このページの表示には JavaScript が必要です。</p></noscript>
+  </main>
+
+  <script>
+  (() => {
+    "use strict";
+
+    // ---------- 設定 ----------
+    const STORAGE_DIR = "storage/";      // 相対パス（GitHub Pages のサブパスでも動く）
+    const MIN_INITIAL_ARTICLES = 20;     // 初回表示で最低限読み込む件数
+    const MAX_DAYS_PER_LOAD = 7;         // 1回の読み込みで取得する日数の上限
+    const CATEGORY_LABELS = {            // feeds.json の category → 表示名
+      company_blog: "公式ブログ",
+      media: "海外メディア",
+      media_jp: "国内メディア",
+      research: "論文",
+    };
+
+    // ---------- 状態 ----------
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const WEEKDAYS = "日月火水木金土";
+    const $ = (id) => document.getElementById(id);
+    const els = {
+      updated: $("updated"), chips: $("chips"), days: $("days"),
+      status: $("status"), more: $("more"),
+    };
+    const state = {
+      ready: false,    // index.json を読み込み済みか
+      loading: false,
+      error: null,
+      dates: [],       // index.json の日付（新しい順）
+      days: [],        // 読み込み済みの日: { date, updated, articles }
+      next: 0,         // 次に読み込む dates の位置
+      filter: "all",   // 選択中のカテゴリ
+    };
+
+    // ---------- 小さな部品 ----------
+    // 外部サイトの文字列を扱うので、HTMLとして解釈させず textContent で入れる
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    // http(s) 以外（javascript: など）のリンクは使わない
+    function safeUrl(value) {
+      try {
+        const url = new URL(value, location.href);
+        return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+      } catch {
+        return null;
+      }
+    }
+
+    // "2026-10-12T08:00:00+09:00" → "10/12 08:00"（JST固定の文字列をそのまま整形）
+    function fmtStamp(iso) {
+      const m = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso || "");
+      return m ? `${+m[1]}/${+m[2]} ${m[3]}` : "";
+    }
+
+    function fmtDay(dateStr) {
+      const [y, m, d] = dateStr.split("-").map(Number);
+      return `${m}月${d}日（${WEEKDAYS[new Date(y, m - 1, d).getDay()]}）`;
+    }
+
+    function fmtShortDate(dateStr) {
+      const [, m, d] = dateStr.split("-").map(Number);
+      return `${m}/${d}`;
+    }
+
+    const matches = (a) => state.filter === "all" || (a.category || "") === state.filter;
+    const countVisible = () =>
+      state.days.reduce((n, day) => n + day.articles.filter(matches).length, 0);
+
+    // ---------- データ取得 ----------
+    // fresh=true: 毎回サーバーに更新確認（変更がなければ 304 で軽く済む）
+    async function fetchJson(path, fresh) {
+      const res = await fetch(path, fresh ? { cache: "no-cache" } : undefined);
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    }
+
+    async function loadNextDay() {
+      const date = state.dates[state.next];
+      // 最新の日は更新されうるので毎回確認。過去の日はブラウザのキャッシュを使う
+      const data = await fetchJson(`${STORAGE_DIR}${date}.json`, state.next === 0);
+      const articles = (Array.isArray(data.articles) ? data.articles : [])
+        .filter((a) => a && typeof a.title === "string");
+      state.days.push({ date, updated: data.updated || "", articles });
+      state.next += 1;  // 失敗時は進めない（再試行で同じ日から再開できる）
+    }
+
+    // 少なくとも1日分、表示件数が targetVisible に届くまで読み込む
+    async function loadDays(targetVisible) {
+      if (state.loading) return;
+      state.loading = true;
+      state.error = null;
+      renderFooter();
+      try {
+        let n = 0;
+        while (
+          state.next < state.dates.length &&
+          n < MAX_DAYS_PER_LOAD &&
+          (n === 0 || countVisible() < targetVisible)
+        ) {
+          await loadNextDay();
+          n += 1;
+        }
+      } catch (e) {
+        state.error = e;
+      }
+      state.loading = false;
+      renderList();
+      renderFooter();
+    }
+
+    async function init() {
+      if (state.loading) return;
+      state.loading = true;
+      state.error = null;
+      renderFooter();
+      try {
+        const index = await fetchJson(`${STORAGE_DIR}index.json`, true);
+        state.dates = (Array.isArray(index.dates) ? index.dates : []).filter((d) => DATE_RE.test(d));
+        state.ready = true;
+      } catch (e) {
+        state.error = e;
+      }
+      state.loading = false;
+      if (state.ready) {
+        await loadDays(MIN_INITIAL_ARTICLES);
+      } else {
+        renderFooter();
+      }
+    }
+
+    // ---------- 描画 ----------
+    function renderChips() {
+      const cats = [...new Set(state.days.flatMap((d) => d.articles.map((a) => a.category || "")))]
+        .filter(Boolean);
+      els.chips.hidden = cats.length < 2;
+      const make = (key, label) => {
+        const b = el("button", "chip", label);
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(state.filter === key));
+        b.addEventListener("click", () => {
+          state.filter = key;
+          renderList();
+          renderFooter();
+        });
+        return b;
+      };
+      els.chips.replaceChildren(
+        make("all", "すべて"),
+        ...cats.map((c) => make(c, CATEGORY_LABELS[c] || c))
+      );
+    }
+
+    function renderItem(a) {
+      const href = safeUrl(a.url);
+      if (!href) return null;
+
+      const li = el("li", "item");
+      li.dataset.cat = a.category || "";
+
+      const meta = el("div", "meta");
+      const dot = el("span", "dot");
+      dot.setAttribute("aria-hidden", "true");
+      meta.append(dot, el("span", "source", a.source || ""));
+      const stamp = fmtStamp(a.published);
+      if (stamp) {
+        const time = el("time", "time", stamp);
+        time.dateTime = a.published;
+        meta.append(time);
+      }
+
+      const link = el("a", null, a.title);
+      link.href = href;
+      link.target = "_blank";            // 戻ったときに一覧の位置が失われないよう別タブで開く
+      link.rel = "noopener noreferrer";
+      const title = el("h3", "title");
+      title.append(link);
+
+      li.append(meta, title);
+      if (a.description) li.append(el("p", "desc", a.description));
+      return li;
+    }
+
+    function renderList() {
+      renderChips();
+      const latest = state.days[0] && state.days[0].updated;
+      els.updated.textContent = latest ? `更新 ${fmtStamp(latest)}` : "";
+
+      const frag = document.createDocumentFragment();
+      for (const day of state.days) {
+        const items = day.articles.filter(matches).map(renderItem).filter(Boolean);
+        if (!items.length) continue;
+        const head = el("h2", "day-head");
+        head.append(el("span", null, fmtDay(day.date)), el("span", "count", `${items.length}件`));
+        const list = el("ul", "list");
+        list.append(...items);
+        const section = el("section", "day");
+        section.append(head, list);
+        frag.append(section);
+      }
+      els.days.replaceChildren(frag);
+    }
+
+    function renderFooter() {
+      const hasMore = state.next < state.dates.length;
+      let message = "";
+      let label = "";
+
+      if (state.loading) {
+        if (state.days.length) label = "読み込み中…";
+        else message = "読み込み中…";
+      } else if (state.error) {
+        message = "読み込めませんでした。通信状況を確認してから、再試行してください。";
+        label = "再試行";
+      } else if (state.ready && !state.dates.length) {
+        message = "記事がありません。main.py を実行して storage を生成してください。";
+      } else if (state.ready) {
+        if (countVisible() === 0) message = "この絞り込みに合う記事は、読み込んだ範囲にありません。";
+        else if (!hasMore) message = "これより前の記事はありません。";
+        if (hasMore) label = `さらに読み込む（${fmtShortDate(state.dates[state.next])}）`;
+      }
+
+      els.status.textContent = message;
+      els.more.textContent = label;
+      els.more.hidden = !label;
+      els.more.disabled = state.loading;
+    }
+
+    els.more.addEventListener("click", () => {
+      if (state.ready) loadDays(countVisible() + 1);
+      else init();
+    });
+
+    init();
+  })();
+  </script>
+</body>
+</html>
